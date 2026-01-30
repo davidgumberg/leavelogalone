@@ -122,7 +122,7 @@ class LogCompiler:
 
         return scanf_compile(fmt_str, collapseWhitespace=False)
 
-    def visit_node(self, node):
+    def visit_node(self, node: ci.Cursor):
         if node.location.file:
             fname = node.location.file.name
             # skip files outside of our dir
@@ -137,7 +137,7 @@ class LogCompiler:
         for child in node.get_children():
             self.visit_node(child)
 
-    def process_log_call(self, node):
+    def process_log_call(self, node: ci.Cursor):
         macro = node.spelling
         args = get_macro_args(node)
         # Todo: include metadata:
@@ -168,8 +168,8 @@ class LogCompiler:
         regex_types = [getattr(t, '__name__', str(t)) for t in regex_types]
 
         loc = node.location
-        file_name = loc.file.name if loc.file else None
-
+        file_name = Path(loc.file.name) if loc.file else ""
+        file_name = str(file_name.relative_to(self.root_dir))
 
         msg = LogMessage(
             fmt=fmt_str,
