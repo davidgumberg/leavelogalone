@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import ArgumentError
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Pattern
 
 from scanf import scanf_compile
 
@@ -18,6 +18,7 @@ from clang.cindex import CompilationDatabase, CompilationDatabaseError, Index, T
 @dataclass(frozen=True, slots=True)
 class LogMessage:
     fmt: str                     # the format string (without surrounding quotes)
+    regex: tuple[Pattern, list[str]]
     file: Optional[str]         # source file name (None for built‑ins)
     line: int                    # line number of the macro call
     column: int                  # column number of the macro call
@@ -162,13 +163,15 @@ class LogCompiler:
 
         # on second thought, store the fmt strings in the text file,
         # the log parser can compile to regex's at load time?
-        #regex = self.fmt_to_regex(fmt_str)
+        regex = self.fmt_to_regex(fmt_str)
 
         loc = node.location
         file_name = loc.file.name if loc.file else None
 
+
         msg = LogMessage(
             fmt=fmt_str,
+            regex=regex,
             file=file_name,
             line=loc.line,
             column=loc.column,
