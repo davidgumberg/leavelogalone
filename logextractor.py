@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import ArgumentError
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Pattern
+from typing import Optional
 
 from scanf import scanf_compile
 
@@ -18,7 +18,7 @@ from clang.cindex import CompilationDatabase, CompilationDatabaseError, Index, T
 @dataclass(frozen=True, slots=True)
 class LogMessage:
     fmt: str                     # the format string (without surrounding quotes)
-    regex: tuple[Pattern, list[str]]
+    regex: tuple[str, list[str]]
     file: Optional[str]         # source file name (None for built‑ins)
     line: int                    # line number of the macro call
     column: int                  # column number of the macro call
@@ -163,7 +163,9 @@ class LogCompiler:
 
         # on second thought, store the fmt strings in the text file,
         # the log parser can compile to regex's at load time?
-        regex = self.fmt_to_regex(fmt_str)
+        regex, regex_types = self.fmt_to_regex(fmt_str)
+        regex = regex.pattern
+        regex_types = [getattr(t, '__name__', str(t)) for t in regex_types]
 
         loc = node.location
         file_name = loc.file.name if loc.file else None
@@ -171,7 +173,7 @@ class LogCompiler:
 
         msg = LogMessage(
             fmt=fmt_str,
-            regex=regex,
+            regex=(regex, regex_types),
             file=file_name,
             line=loc.line,
             column=loc.column,
@@ -216,6 +218,7 @@ class LogCompiler:
 
     def parse_file(self, filename):
         print(f"Parsing {filename}...")
+        filename = Path(filename)
         cmds = self.cdb.getCompileCommands(filename)
         if cmds is None:
             raise ArgumentError(f"{filename} not found in compilation database!")
@@ -294,10 +297,16 @@ class LogCompiler:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage!!! logextractor.py {src_dir} {out_path}")
+    if len(sys.argv) == 3:
+        compiler = LogCompiler(sys.argv[1])
+        compiler.parse_all()
+    elif len(sys.argv) == 4:
+        compiler = LogCompiler(sys.argv[1])
+        compiler.parse_file(sys.argv[2])
+    else:
+        print(
+            "Usage!!! logextractor.py {src_dir} {out_path}\n"
+            "Or!!! logextractor.py {src_dir} {file} {out_path}\n"
+            )
         sys.exit(-1)
-
-    compiler = LogCompiler(sys.argv[1])
-    compiler.parse_all()
-    compiler.dump_db("log_defs.json")
+    compiler.dump_db(sys.argv[-1])
