@@ -1,14 +1,28 @@
-from ctypes import ArgumentError
-from pathlib import Path
-from pprint import pprint
-import os
-import sys
-import re
 import json
-from typing import Optional, Tuple
+import os
+import queue
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from ctypes import ArgumentError
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Optional
+
+from scanf import scanf_compile
+
 import clang.cindex as ci
 from clang.cindex import CompilationDatabase, CompilationDatabaseError, Index, TranslationUnit
-from scanf import scanf, scanf_compile
+
+@dataclass(frozen=True, slots=True)
+class LogMessage:
+    fmt: str                     # the format string (without surrounding quotes)
+    file: Optional[str]         # source file name (None for built‑ins)
+    line: int                    # line number of the macro call
+    column: int                  # column number of the macro call
+    macro: str                   # which Log* macro was used
+    category: Optional[str] = None   # optional category argument
 
 
 def arg_str(arg: list[ci.Token]) -> str:
@@ -56,6 +70,7 @@ def get_macro_args(cursor: ci.Cursor) -> list[list[ci.Token]]:
 class LogCompiler:
     def __init__(self, root_dir):
         self.root_dir = Path(root_dir)
+        self.root_dir_str = str(self.root_dir)
         self.build_dir = self.root_dir / "build"
 
         compile_commands_path = self.build_dir / "compile_commands.json"
@@ -84,7 +99,18 @@ class LogCompiler:
             'LogWarning',
             'LogPrintFormatInternal'
         }
-        self.log_messages = []
+
+        self.lock = threading.Lock()
+        self.log_messages: list[LogMessage] = []
+
+        self.num_threads = os.cpu_count() or 4
+
+        self.index_pool = queue.Queue()
+
+        for _ in range(self.num_threads):
+            self.index_pool.put(Index.create())
+
+
 
     def fmt_to_regex(self, fmt_str):
         """
@@ -96,6 +122,12 @@ class LogCompiler:
         return scanf_compile(fmt_str, collapseWhitespace=False)
 
     def visit_node(self, node):
+        if node.location.file:
+            fname = node.location.file.name
+            # skip files outside of our dir
+            if not fname.startswith(self.root_dir_str):
+                return
+
         if node.kind.is_expression() or node.kind == ci.CursorKind.MACRO_INSTANTIATION:
             if node.spelling in self.log_funcs:
                 self.process_log_call(node)
@@ -131,31 +163,62 @@ class LogCompiler:
         # on second thought, store the fmt strings in the text file,
         # the log parser can compile to regex's at load time?
         #regex = self.fmt_to_regex(fmt_str)
-        self.log_messages.append(fmt_str)
 
+        loc = node.location
+        file_name = loc.file.name if loc.file else None
+
+        msg = LogMessage(
+            fmt=fmt_str,
+            file=file_name,
+            line=loc.line,
+            column=loc.column,
+            macro=macro,
+            category=category,
+        )
+        with self.lock:
+            self.log_messages.append(msg)
+
+    def parse_worker(self, filename, args):
+        """Worker method for the thread pool."""
+        index = self.index_pool.get()
+
+        try:
+            tu = index.parse(
+                str(filename),
+                args=args,
+                options=TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+            )
+            self.visit_node(tu.cursor)
+            return filename
+        except Exception as e:
+            print(f"\nError parsing {filename}: {e}")
+            return None
+        finally:
+            self.index_pool.put(index)
+
+    @staticmethod
+    def compile_args(basename, args):
+        arglist = list(args)[1:]
+        clean = []
+
+        for a in arglist:
+            # stop parsing at -- {filename.cpp}
+            if a == '--':
+                break
+            # These break everything for some reason
+            elif not a.startswith('-') and a.endswith(basename):
+                continue
+            clean.append(a)
+        return clean
 
     def parse_file(self, filename):
-        def compile_args(args):
-            # generator to list
-            arglist = list(args)
-            # first arg is compiler command
-            arglist = arglist[1:]
-
-            clean = []
-            for a in arglist:
-                # stop parsing at -- {filename.cpp}
-                if a == '--':
-                    break
-                clean.append(a)
-            return clean
         print(f"Parsing {filename}...")
         cmds = self.cdb.getCompileCommands(filename)
         if cmds is None:
             raise ArgumentError(f"{filename} not found in compilation database!")
 
         # We only want the first one if multiple exist.
-        args = compile_args(cmds[0].arguments)
-        TranslationUnit.PARSE_INCOMPLETE
+        args = LogCompiler.compile_args(os.path.basename(filename.absolute()), cmds[0].arguments)
 
         try:
             tu = self.index.parse(
@@ -163,35 +226,22 @@ class LogCompiler:
                 args=args,
                 options=TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
         except ci.TranslationUnitLoadError as e:
-            print(f"Something went wrong parsing {filename} with {args}")
             print(e)
-
-        failed = False
-        for diag in tu.diagnostics:
-            # You can filter by severity.
-            # Severity 3 is Error, 4 is Fatal.
-            if diag.severity >= ci.Diagnostic.Error:
-                print(f"DIAGNOSTIC: {diag.spelling}")
-                print(f"  Location: {diag.location.file}:{diag.location.line}:{diag.location.column}")
-                print(f"  Severity: {diag.severity}")
-                failed = True
-
-        if failed:
-            print(f"Skipping {filename} due to parsing errors.")
-            return
+            print(f"Something went wrong parsing {filename} with args: {args}")
+            raise
 
         self.visit_node(tu.cursor)
 
     def parse_all(self):
         exclude_dirs = [
+            # No debug.log messages live in these places!
             self.root_dir / "src" / "bench",
             self.root_dir / "src" / "test",
             self.root_dir / "src" / "ipc" / "test",
-            self.build_dir / "src" / "qt",
-            self.root_dir / "src" / "qt",
-            self.build_dir / "src" / "qt" / "test",
             self.root_dir / "src" / "qt" / "test",
             self.root_dir / "src" / "wallet" / "test",
+            # autogenerated stuff
+            self.build_dir,
         ]
 
         exclude_dirs = [p.resolve() for p in exclude_dirs]
@@ -201,22 +251,43 @@ class LogCompiler:
             raise AssertionError
 
         seen: set[Path] = set()
+        tasks = []
 
         for cmd in all_cmds:
             src_path = Path(cmd.filename).resolve()
             if src_path in seen:
                 continue
             seen.add(src_path)
-            # skip test files, they cause trouble!!!
             if any(src_path.is_relative_to(d) for d in exclude_dirs):
                 continue
             if src_path.suffix == ".cpp":
-                self.parse_file(src_path)
+                args = self.compile_args(os.path.basename(src_path.absolute()), cmd.arguments)
+                tasks.append((src_path, args))
 
+        print(f"Parsing {len(tasks)} files using {os.cpu_count()} threads...")
+
+        with ThreadPoolExecutor() as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(self.parse_worker, f, a): f
+                for f, a in tasks
+            }
+
+            # Watch for completion
+            for i, future in enumerate(as_completed(futures)):
+                try:
+                    future.result() # Raises exceptions if the thread crashed
+                    if i % 10 == 0:
+                        print(f"Progress: {i}/{len(tasks)}", end='\r')
+                except Exception as e:
+                    print(f"\nTask failed: {e}")
 
     def dump_db(self, out_file):
+        # Convert each LogMessage to a plain dict before dumping
+        serialisable = [asdict(m) for m in self.log_messages]
+
         with open(out_file, 'w') as f:
-            json.dump(self.log_messages, f, indent=2)
+            json.dump(serialisable, f, indent=2)
 
 
 if __name__ == "__main__":
