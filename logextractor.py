@@ -205,7 +205,7 @@ class LogCompiler:
                 "CMAKE_EXPORT_COMPILE_COMMANDS=ON")
 
         try:
-            self.cdb = CompilationDatabase.fromDirectory(os.path.join(root_dir, "build"))
+            self.cdb = CompilationDatabase.fromDirectory(self.build_dir)
         except CompilationDatabaseError:
             raise ArgumentError(
                 f"Error: something went wrong loading {compile_commands_path}")
@@ -217,8 +217,6 @@ class LogCompiler:
         arglist = list(args)[1:]
         clean = []
         skip_next = False
-        # Flags that slow down parsing but aren't needed for AST generation
-        bad_prefixes = ('-O', '-W', '-g', '-f')
 
         for a in arglist:
             # stop parsing at -- {filename.cpp}
@@ -231,10 +229,9 @@ class LogCompiler:
             elif a == '-c':
                 skip_next = True
                 continue
-            elif a.startswith(bad_prefixes):
-                continue
             clean.append(a)
 
+        # Maybe speeds things up?
         clean.append('-fsyntax-only')
         return clean
 
