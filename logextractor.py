@@ -142,7 +142,13 @@ def process_log(node: ci.Cursor, root_dir: str) -> LogMessage:
     # the log parser can compile to regex's at load time?
     regex, regex_types = fmt_to_regex(fmt_str)
     regex = regex.pattern
-    regex_types = [getattr(t, '__name__', str(t)) for t in regex_types]
+    cleaned_types = []
+    for t in regex_types:
+        name = getattr(t, '__name__', str(t))
+        if name == '<lambda>':
+            cleaned_types.append('str')
+        else:
+            cleaned_types.append(name)
 
     passed_arguments: list[str] = log_args[idx+1:]
 
@@ -152,7 +158,7 @@ def process_log(node: ci.Cursor, root_dir: str) -> LogMessage:
     return LogMessage(
         fmt=fmt_str,
         regex=regex,
-        regex_types=regex_types,
+        regex_types=cleaned_types,
         args=passed_arguments,
         file=str(file_name),
         line=loc.line,
