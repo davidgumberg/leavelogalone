@@ -20,6 +20,16 @@ LOG_FUNCS = {
     'LogPrintFormatInternal'
 }
 
+def print_ast(node: ci.Cursor, indent=0):
+    prefix = "  " * indent
+    print(
+        f"{prefix}{node.kind} : '{node.spelling}' "
+        f"(Ref: '{node.referenced.spelling if node.referenced else 'None'}')")
+
+    # Recurse
+    for child in node.get_children():
+        print_ast(child, indent + 2)
+
 @dataclass(frozen=True, slots=True)
 class LogMessage:
     fmt: str                # the format string (without surrounding quotes)
