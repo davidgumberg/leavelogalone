@@ -130,6 +130,8 @@ def process_log(node: ci.Cursor, root_dir: str) -> LogMessage:
         # First arg is category
         category = log_args[idx]
         idx += 1
+    else:
+        category = "BCLog::ALL"
 
     fmt_str = log_args[idx]
     if fmt_str.startswith('"') and fmt_str.endswith('"'):
@@ -154,6 +156,7 @@ def process_log(node: ci.Cursor, root_dir: str) -> LogMessage:
 
     loc = node.location
     file_name = Path(loc.file.name).relative_to(root_dir)
+
 
     return LogMessage(
         fmt=fmt_str,
