@@ -1,4 +1,3 @@
-from contextlib import chdir
 import json
 import os
 import sys
@@ -318,10 +317,9 @@ if __name__ == "__main__":
             )
         sys.exit(-1)
 
-    with chdir(sys.argv[1]):
-        compiler = LogCompiler(sys.argv[1])
-        if len(sys.argv) == 3:
-            compiler.parse_all()
-        elif len(sys.argv) == 4:
-            compiler.parse_file(sys.argv[2])
-        compiler.dump_db(sys.argv[-1])
+    compiler = LogCompiler(sys.argv[1])
+    if len(sys.argv) == 3:
+        compiler.parse_all()
+    elif len(sys.argv) == 4:
+        compiler.parse_file(sys.argv[2])
+    compiler.dump_db(sys.argv[-1])
