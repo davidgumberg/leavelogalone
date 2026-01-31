@@ -194,7 +194,6 @@ def parse_file(
 class LogCompiler:
     def __init__(self, root_dir):
         self.root_dir = Path(root_dir)
-        self.root_dir_str = str(self.root_dir)
         self.build_dir = self.root_dir / "build"
 
         compile_commands_path = self.build_dir / "compile_commands.json"
@@ -250,7 +249,7 @@ class LogCompiler:
         args = LogCompiler.clean_args(cmds[0].arguments)
 
         index = ci.Index.create()
-        self.log_messages.extend(parse_file(str(filename), args, self.root_dir_str, index))
+        self.log_messages.extend(parse_file(str(filename), args, str(self.root_dir), index))
 
     def parse_all(self):
         exclude_dirs = [
@@ -284,7 +283,7 @@ class LogCompiler:
                 continue
             if src_path.suffix == ".cpp":
                 args = self.clean_args(cmd.arguments)
-                tasks.append((src_path, args, self.root_dir_str))
+                tasks.append((src_path, args, str(self.root_dir)))
 
         print(f"Parsing {len(tasks)} files using {os.cpu_count()} threads...")
 
@@ -308,7 +307,6 @@ class LogCompiler:
                     print(f"\nTask failed: {e}")
 
     def dump_db(self, out_file):
-        # Convert each LogMessage to a plain dict before dumping
         serialisable = [asdict(m) for m in self.log_messages]
 
         with open(out_file, 'w') as f:
